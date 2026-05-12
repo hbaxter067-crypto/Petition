@@ -11,9 +11,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;1,8..60,300&display=swap" rel="stylesheet" />
-  <!-- hCaptcha — free, GDPR-friendly bot protection -->
-  <!-- Replace data-sitekey with your key from https://dashboard.hcaptcha.com -->
-  <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -528,17 +525,9 @@
       <div class="email-wrap" id="emailWrap">
         <label for="emailInput">Your email address</label>
         <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" />
-        <p class="email-hint">Not published or shared — used only to verify signatures. Email addresses are stored securely to prevent duplicate signatures and will be deleted when the petition closes.</p>
+        <p class="email-hint">Not published or shared — used only to verify signatures.</p>
       </div>
-      <!-- hCaptcha widget – replace data-sitekey with your key from https://dashboard.hcaptcha.com (free) -->
-      <div id="captchaWrap" style="display:flex;justify-content:center;margin:0.8rem 0 0.4rem;">
-        <div class="h-captcha"
-             data-sitekey="7764999e-c302-438c-9a82-ffd002b2d2fc"
-             data-theme="light"
-             data-callback="onCaptchaSuccess"
-             data-expired-callback="onCaptchaExpired"></div>
-      </div>
-      <button id="signBtn" onclick="sign()" disabled>Sign This Petition</button>
+      <button id="signBtn" onclick="sign()">Sign This Petition</button>
       <p class="signed-note" id="signedNote">Your signature has been recorded — thank you for speaking up.</p>
       <p class="error-note"  id="errorNote"></p>
     </div>
@@ -605,7 +594,7 @@
       </div>
       <div class="stat-card">
         <span class="stat-num red">0</span>
-        <span class="stat-denom">Standalone straight line questions, 2026</span>
+        <span class="stat-denom">Standalone straight line questions in Paper 1, 2026</span>
       </div>
     </div>
 
@@ -768,8 +757,8 @@
 
     <div class="prose">
       <p>Students who raised concerns about this paper did so in good faith, on the basis of a genuine and well-evidenced grievance. They deserved a prompt, transparent, and substantive response — not because the media was watching, but because they are the people this institution exists to serve.</p>
-      <p>If Qualifications Scotland wishes to demonstrate that it is something more than a rebranded SQA, it must show that it can hear young people <em>before</em> a camera is pointed at it. That starts with a transparent explanation and a genuine acknowledgement that what happened in May 2026 was not an acceptable standard for the assessment of Scotland's young people.</p>
-      <p>Every signature here represents someone who deserves to be assessed on their maths — not on their ability to decode a question written in a style they were never shown, and not on their ability to attract the attention of a newspaper editor.</p>
+      <p>If Qualifications Scotland wishes to demonstrate that it is something more than a rebranded SQA, it must show that it can hear young people <em>before</em> a camera is pointed at it. That starts with a transparent explanation and a genuine acknowledgement that the language used in certain questions in May 2026 exceeded the standards set by every previous paper in this course's history.</p>
+      <p>Every signature here represents someone who deserves to be assessed on their maths — not on their ability to decode a question phrased in a way they were never taught, and not on their ability to attract the attention of a newspaper editor.</p>
     </div>
 
   </div><!-- /body-wrap -->
@@ -779,47 +768,10 @@
     It is not affiliated with any political party or organisation.
   </footer>
 
-  <!--
-  ═══════════════════════════════════════════════════════════════════════════════
-  FIREBASE SECURITY RULES — paste these into Firebase Console →
-  Realtime Database → Rules (replaces the default open rules)
-
-  {
-    "rules": {
-      "signatures": {
-        ".read": true,
-        ".write": false
-      },
-      "emails": {
-        "$emailKey": {
-          ".read": false,
-          ".write": "!data.exists() && newData.hasChildren(['ts','captchaVerified']) && newData.child('captchaVerified').isBoolean() && newData.child('captchaVerified').val() === true && newData.child('ts').isNumber()"
-        }
-      }
-    }
-  }
-
-  NOTE: The rules above prevent:
-    • Anyone writing directly to "signatures" (count manipulation)
-    • Anyone signing twice under the same email key
-    • Writes that lack the captchaVerified:true flag
-
-  For full bot protection the hCaptcha token should be verified server-side
-  (Firebase Cloud Function or your own backend) before writing to Firebase.
-  See the inline comment in the sign() function below for the recommended flow.
-
-  HCAPTCHA SETUP:
-    1. Sign up free at https://dashboard.hcaptcha.com
-    2. Add a new site — get your sitekey + secret key
-    3. Replace the data-sitekey value in the HTML widget above
-    4. Replace 'YOUR_HCAPTCHA_SECRET' in the Cloud Function (server-side)
-  ═══════════════════════════════════════════════════════════════════════════════
-  -->
-
   <script type="module">
     import { initializeApp }
       from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-    import { getDatabase, ref, onValue, runTransaction, get, set }
+    import { getDatabase, ref, onValue, runTransaction, push }
       from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 
     const firebaseConfig = {
@@ -834,30 +786,9 @@
 
     const FIREBASE_DB_URL = "https://qspeyition-default-rtdb.firebaseio.com";
     const GOAL      = 5000;
-    const SIGNED_LS = 'qs_petition_signed_v2';  // bumped version to invalidate old fake localStorage
-
-    // Rate limiting: track attempts in memory (resets on page reload, that's fine)
-    let submitAttempts = 0;
-    const MAX_ATTEMPTS = 3;
-    let lastAttemptTime = 0;
+    const SIGNED_LS = 'qs_petition_signed_v1';
 
     let counterRef, db;
-    let captchaToken = null;  // set by hCaptcha callback
-
-    // ── hCaptcha callbacks (must be on window so hCaptcha can call them) ──
-    window.onCaptchaSuccess = function(token) {
-      captchaToken = token;
-      // Enable the sign button only after captcha passes
-      const btn = document.getElementById('signBtn');
-      btn.disabled = false;
-      btn.textContent = 'Sign This Petition';
-    };
-    window.onCaptchaExpired = function() {
-      captchaToken = null;
-      const btn = document.getElementById('signBtn');
-      btn.disabled = true;
-      btn.textContent = 'Complete the check above';
-    };
 
     function showPlaceholderCount() {
       document.getElementById('sigCount').textContent = '—';
@@ -879,24 +810,6 @@
       document.getElementById('fbShare').href = `https://www.facebook.com/sharer/sharer.php?u=${url}`;
     }
 
-    // Convert email to a safe Firebase key (no dots, slashes, etc.)
-    function emailToKey(email) {
-      return email.toLowerCase().replace(/\./g, ',').replace(/@/g, '__at__');
-    }
-
-    function showAlreadySigned(btn, note, errMsg, share) {
-      localStorage.setItem(SIGNED_LS, '1');
-      btn.disabled = true;
-      btn.textContent = '✓ Already Signed';
-      errMsg.textContent = 'This email address has already been used to sign.';
-      errMsg.classList.add('show');
-      document.getElementById('emailWrap').style.display = 'none';
-      document.getElementById('captchaWrap').style.display = 'none';
-      note.classList.add('show');
-      share.classList.add('show');
-      setShareLinks();
-    }
-
     window.sign = async function() {
       const btn      = document.getElementById('signBtn');
       const note     = document.getElementById('signedNote');
@@ -905,94 +818,31 @@
       const emailEl  = document.getElementById('emailInput');
       const emailVal = emailEl ? emailEl.value.trim() : '';
 
-      // ── Client-side rate limit ──
-      const now = Date.now();
-      if (submitAttempts >= MAX_ATTEMPTS && now - lastAttemptTime < 60000) {
-        errMsg.textContent = 'Too many attempts. Please wait a minute before trying again.';
-        errMsg.classList.add('show');
-        return;
-      }
-      submitAttempts++;
-      lastAttemptTime = now;
-
-      // ── Email validation ──
       if (!emailVal || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
         errMsg.textContent = 'Please enter a valid email address to sign.';
         errMsg.classList.add('show');
         emailEl.focus();
         return;
       }
-
-      // ── CAPTCHA check ──
-      if (!captchaToken) {
-        errMsg.textContent = 'Please complete the security check above before signing.';
-        errMsg.classList.add('show');
-        return;
-      }
-
       btn.disabled = true;
       btn.textContent = 'Signing…';
       errMsg.classList.remove('show');
 
-      /*
-       * ── RECOMMENDED: Server-side captcha verification ──────────────────────
-       * For strongest protection, replace the direct Firebase write below with
-       * a call to your own backend / Firebase Cloud Function that:
-       *   1. Receives { email, captchaToken }
-       *   2. POSTs captchaToken to https://hcaptcha.com/siteverify with your secret
-       *   3. Only if verification passes: writes to Firebase and increments counter
-       *
-       * Example Cloud Function endpoint call:
-       *   const res = await fetch('https://your-region-yourproject.cloudfunctions.net/signPetition', {
-       *     method: 'POST',
-       *     headers: { 'Content-Type': 'application/json' },
-       *     body: JSON.stringify({ email: emailVal, captchaToken })
-       *   });
-       *   const { ok, error } = await res.json();
-       *
-       * This prevents anyone bypassing hCaptcha by calling Firebase directly.
-       * Until you have a backend, the client-side check + Firebase rules below
-       * still block bots and casual abuse.
-       * ────────────────────────────────────────────────────────────────────── */
-
       try {
-        const emailKey = emailToKey(emailVal);
-        const emailRef = ref(db, 'emails/' + emailKey);
-
-        // Server-enforced duplicate check (Firebase Rules also enforce this)
-        const existing = await get(emailRef);
-        if (existing.exists()) {
-          showAlreadySigned(btn, note, errMsg, share);
-          return;
-        }
-
-        // Write email record — Firebase Rules require captchaVerified:true
-        // and will reject any write to 'signatures' directly
-        await set(emailRef, { ts: Date.now(), captchaVerified: true });
-
-        // Increment counter via transaction — still atomic, but now gated by
-        // the email write above (Rules prevent writing here without an email)
         await runTransaction(counterRef, (current) => (current ?? 0) + 1);
-
-        // Invalidate captcha so they can't reuse it
-        captchaToken = null;
-        if (window.hcaptcha) window.hcaptcha.reset();
-
+        const emailsRef = ref(db, 'emails');
+        await push(emailsRef, { email: emailVal, ts: Date.now() });
         localStorage.setItem(SIGNED_LS, '1');
         btn.textContent = '✓ Signed — Thank you';
         note.classList.add('show');
         share.classList.add('show');
         setShareLinks();
         document.getElementById('emailWrap').style.display = 'none';
-        document.getElementById('captchaWrap').style.display = 'none';
       } catch(e) {
         console.error(e);
-        // Reset captcha on failure so they can try again
-        captchaToken = null;
-        if (window.hcaptcha) window.hcaptcha.reset();
         btn.disabled = false;
         btn.textContent = 'Try Again';
-        errMsg.textContent = 'Could not save signature. Please check your connection and try again.';
+        errMsg.textContent = 'Could not save signature. Please check your connection.';
         errMsg.classList.add('show');
       }
     };
@@ -1020,7 +870,6 @@
         showPlaceholderCount();
         return;
       }
-      // Check localStorage — but button stays disabled until captcha is solved
       if (localStorage.getItem(SIGNED_LS)) {
         const btn = document.getElementById('signBtn');
         btn.disabled = true;
@@ -1028,7 +877,6 @@
         document.getElementById('signedNote').classList.add('show');
         document.getElementById('shareRow').classList.add('show');
         document.getElementById('emailWrap').style.display = 'none';
-        document.getElementById('captchaWrap').style.display = 'none';
         setShareLinks();
       }
     };
